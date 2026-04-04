@@ -124,11 +124,10 @@ impl ContextBuilder {
             }
             context_tokens += content.len();
 
-            let relative_path = file
+            let relative_path: std::path::PathBuf = file
                 .strip_prefix(&self.base_path)
                 .unwrap_or(&file)
-                .to_string_lossy()
-                .to_string();
+                .to_path_buf();
 
             messages.push(Message::system(format!(
                 "File: {}\n```\n{}\n```",

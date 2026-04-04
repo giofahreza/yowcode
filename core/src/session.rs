@@ -282,7 +282,7 @@ impl SessionManager {
     // ==================== Project Management ====================
 
     /// Create a new project
-    pub async fn create_project(&self, mut project: Project) -> Result<Uuid> {
+    pub async fn create_project(&self, project: Project) -> Result<Uuid> {
         let id = project.id;
 
         // Persist to database
