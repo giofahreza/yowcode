@@ -1,3 +1,4 @@
+use crate::error::Result;
 use crate::message::{Message, MessageRole, MessageContent};
 use crate::types::FilePath;
 use ignore::WalkBuilder;
@@ -131,7 +132,7 @@ impl ContextBuilder {
 
             messages.push(Message::system(format!(
                 "File: {}\n```\n{}\n```",
-                relative_path, content
+                relative_path.display(), content
             )));
         }
 
