@@ -1,0 +1,44 @@
+# YowCode Configuration Example
+# Copy this to ~/.yowcode/config.toml and fill in your values
+
+[database]
+path = "~/.yowcode/yowcode.db"
+
+[ai]
+# Provider: "anthropic", "openai", or "openrouter"
+provider = "anthropic"
+
+# Your API key (can also be set via YOWCODE_API_KEY env var)
+api_key = ""
+
+# Base URL for the API (provider-specific defaults are used if not set)
+base_url = "https://api.anthropic.com/v1/messages"
+
+# Model to use
+model = "claude-sonnet-4-20250514"
+
+# Maximum tokens for responses
+max_tokens = 8192
+
+# Temperature for generation (0.0 - 1.0)
+temperature = 0.7
+
+[server]
+# Web server host
+host = "127.0.0.1"
+
+# Web server port
+port = 3000
+
+# CORS allowed origins
+cors_origins = ["http://localhost:3000"]
+
+[cli]
+# UI theme: "light" or "dark"
+theme = "dark"
+
+# Default editor (optional, uses system default if not set)
+# editor = "vim"
+
+# Default permission mode: "default", "auto", "always_ask", "bypass"
+default_permission_mode = "default"

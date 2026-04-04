@@ -1,0 +1,204 @@
+name: Deploy Release Tag
+
+on:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-cli:
+    runs-on: ubuntu-latest
+    env:
+      RUST_VERSION: "stable"
+      COMPONENT: "cli"
+      ARTIFACT_NAME: yowcode-${{ github.ref_name }}-linux-amd64.tar.gz
+      ARTIFACT_SHA256: yowcode-${{ github.ref_name }}-linux-amd64.tar.gz.sha256
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cargo build --release --bin yowcode
+          tar -C target/release -czf "$ARTIFACT_NAME" yowcode
+          sha256sum "$ARTIFACT_NAME" > "$ARTIFACT_SHA256"
+
+      - name: Join ZeroTier network
+        uses: zerotier/github-action@v1
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          auth_token: ${{ secrets.ZEROTIER_CENTRAL_TOKEN }}
+
+      - name: Wait for ZeroTier routing
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if timeout 5 bash -c "</dev/tcp/${{ secrets.DEPLOY_HOST }}/${{ secrets.DEPLOY_PORT }}"; then
+              exit 0
+            fi
+            echo "Waiting for TCP connectivity to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }} (attempt ${attempt}/18)"
+            sleep 5
+          done
+          echo "ZeroTier routing to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }} did not become ready in time" >&2
+          exit 1
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy.key
+          chmod 600 ~/.ssh/deploy.key
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload artifact
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "install -d -m 700 ~/uploads"
+          scp -i ~/.ssh/deploy.key -P "${{ secrets.DEPLOY_PORT }}" "$ARTIFACT_NAME" "$ARTIFACT_SHA256" \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/uploads/"
+
+      - name: Deploy on target host
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "sudo /usr/local/sbin/yowcode-deploy \
+              --artifact /home/${{ secrets.DEPLOY_USER }}/uploads/$ARTIFACT_NAME \
+              --sha256-file /home/${{ secrets.DEPLOY_USER }}/uploads/$ARTIFACT_SHA256 \
+              --version '${{ github.ref_name }}' \
+              --component ${{ env.COMPONENT }}"
+
+      - name: Verify remote service
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "systemctl is-active yowcode-cli.service && readlink -f /opt/yowcode/cli/current"
+
+  deploy-web:
+    runs-on: ubuntu-latest
+    env:
+      RUST_VERSION: "stable"
+      COMPONENT: "web"
+      ARTIFACT_NAME: yowcode-web-${{ github.ref_name }}-linux-amd64.tar.gz
+      ARTIFACT_SHA256: yowcode-web-${{ github.ref_name }}-linux-amd64.tar.gz.sha256
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cargo build --release --bin yowcode-web
+          tar -C target/release -czf "$ARTIFACT_NAME" yowcode-web
+          sha256sum "$ARTIFACT_NAME" > "$ARTIFACT_SHA256"
+
+      - name: Join ZeroTier network
+        uses: zerotier/github-action@v1
+        with:
+          network_id: ${{ secrets.ZEROTIER_NETWORK_ID }}
+          auth_token: ${{ secrets.ZEROTIER_CENTRAL_TOKEN }}
+
+      - name: Wait for ZeroTier routing
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if timeout 5 bash -c "</dev/tcp/${{ secrets.DEPLOY_HOST }}/${{ secrets.DEPLOY_PORT }}"; then
+              exit 0
+            fi
+            echo "Waiting for TCP connectivity to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }} (attempt ${attempt}/18)"
+            sleep 5
+          done
+          echo "ZeroTier routing to ${{ secrets.DEPLOY_HOST }}:${{ secrets.DEPLOY_PORT }} did not become ready in time" >&2
+          exit 1
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy.key
+          chmod 600 ~/.ssh/deploy.key
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload artifact
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "install -d -m 700 ~/uploads"
+          scp -i ~/.ssh/deploy.key -P "${{ secrets.DEPLOY_PORT }}" "$ARTIFACT_NAME" "$ARTIFACT_SHA256" \
+            "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:~/uploads/"
+
+      - name: Deploy on target host
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "sudo /usr/local/sbin/yowcode-deploy \
+              --artifact /home/${{ secrets.DEPLOY_USER }}/uploads/$ARTIFACT_NAME \
+              --sha256-file /home/${{ secrets.DEPLOY_USER }}/uploads/$ARTIFACT_SHA256 \
+              --version '${{ github.ref_name }}' \
+              --component ${{ env.COMPONENT }}"
+
+      - name: Verify remote service
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy.key -p "${{ secrets.DEPLOY_PORT }}" "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            "systemctl is-active yowcode-web.service && readlink -f /opt/yowcode/web/current"

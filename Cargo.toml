@@ -1,0 +1,75 @@
+[workspace]
+members = [
+    "core",
+    "cli",
+    "web",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["YowCode Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yowcode/yowcode"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+tokio-tungstenite = "0.26"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"], default-features = false }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+crossterm = "0.28"
+ratatui = "0.29"
+
+# Web
+axum = { version = "0.8", features = ["ws"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+hyper = "1.5"
+
+# AI / LLM
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Utilities
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1.9"
+
+# Templating
+askama = "0.13"
+
+# Configuration
+config = "0.15"
+toml = "0.8"
+dirs = "5.0"
+
+# File system
+walkdir = "2.5"
+ignore = "0.4"
+
+# Shell command execution
+# command-group = { version = "5.0", features = ["with-tokio"] }
