@@ -82,7 +82,7 @@ pub struct SessionManager {
 struct SessionState {
     session: Session,
     history: ChatHistory,
-    context: Context,
+    _context: Context,
 }
 
 /// Session context (file system, symbols, etc.)
@@ -157,7 +157,7 @@ impl SessionManager {
         let state = SessionState {
             session,
             history: ChatHistory::new(id),
-            context: Context::default(),
+            _context: Context::default(),
         };
         self.sessions.write().await.insert(id, state);
 

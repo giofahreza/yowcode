@@ -43,7 +43,7 @@ pub struct ExecutionResult {
 pub struct ChatExecutor {
     ai_client: Arc<dyn AIClient>,
     tool_registry: Arc<ToolRegistry>,
-    session_tx: tokio::sync::broadcast::Sender<SessionEvent>,
+    _session_tx: tokio::sync::broadcast::Sender<SessionEvent>,
     current_directory: Arc<RwLock<Option<String>>>,
 }
 
@@ -56,7 +56,7 @@ impl ChatExecutor {
         Self {
             ai_client,
             tool_registry,
-            session_tx,
+            _session_tx: session_tx,
             current_directory: Arc::new(RwLock::new(None)),
         }
     }
