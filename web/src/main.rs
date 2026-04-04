@@ -1,34 +1,30 @@
 use anyhow::{Context, Result};
 use axum::{
     extract::{
-        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
-        Path, State,
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade}, State,
     },
-    http::{HeaderMap, HeaderValue, StatusCode},
-    response::{Html, IntoResponse, Json},
-    routing::{get, post, put},
+    response::IntoResponse,
+    routing::{get, put},
     Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
-use tracing::{error, info, warn};
+use tokio::sync::broadcast;
+use tracing::{error, info};
 use uuid::Uuid;
 use yowcode_core::{
     ai::{AIConfig, AIProvider, OpenAICompatClient},
     config::Config,
     database::initialize_database,
     executor::{ChatExecutor, ExecutionEvent, ExecutionOptions},
-    message::{ChatHistory, Message, MessageContent, MessageRole},
+    message::{ChatHistory, Message},
     runs::RunManager,
-    session::{Session, SessionEvent, SessionManager, SessionSettings},
-    tool::{ToolExecutor, ToolParameterSchema, ToolRegistry, ToolResult},
+    session::{Session, SessionEvent, SessionManager},
+    tool::{ToolExecutor, ToolRegistry, ToolResult},
     types::PermissionMode,
 };
 
 // Use core library's tool types directly
-use yowcode_core::tool::{Tool, ToolExecutionContext};
 
 mod handlers;
 
@@ -193,7 +189,7 @@ async fn websocket_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    let mut session_id: Option<Uuid> = None;
+    let session_id: Option<Uuid> = None;
 
     // Subscribe to session events
     let mut event_rx = state.session_manager.subscribe();
@@ -247,7 +243,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                     session_id: sid,
                                     message,
                                 } => {
-                                    session_id = Some(sid);
+                                    let _ = sid;  // Use the session_id directly
 
                                     // Send user message
                                     let _ = state
@@ -324,7 +320,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                     }
                                 }
                                 WSMessage::JoinSession { session_id: sid } => {
-                                    session_id = Some(sid);
+                                    let _ = sid;  // Use the session_id directly
                                     if let Ok(history) = state.session_manager.get_history(sid).await {
                                         let messages: Vec<handlers::ClientMessage> =
                                             history.messages.into_iter().map(Into::into).collect();

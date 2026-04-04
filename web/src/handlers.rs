@@ -6,10 +6,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yowcode_core::{
-    message::{Message, MessageContent, MessageRole},
-    runs::{Artifact, AuditEvent, Run, RunConfig, RunStats, Task},
+    message::Message,
+    runs::RunConfig,
     session::{Session, SessionSettings},
-    types::{PermissionMode, Project},
+    types::Project,
 };
 
 use super::AppState;
@@ -600,7 +600,7 @@ pub async fn index() -> impl IntoResponse {
 }
 
 /// Serve static files (placeholder)
-pub async fn static_files(Path(path): Path<String>) -> impl IntoResponse {
+pub async fn static_files(Path(_path): Path<String>) -> impl IntoResponse {
     (
         StatusCode::NOT_FOUND,
         "Static files not implemented yet",

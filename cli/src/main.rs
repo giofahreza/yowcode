@@ -1,23 +1,24 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
+    layout::Position,
 };
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::info;
 use uuid::Uuid;
 use yowcode_core::{
     ai::{AIConfig, AIProvider, OpenAICompatClient},
@@ -27,7 +28,7 @@ use yowcode_core::{
     executor::{ChatExecutor, ExecutionEvent, ExecutionOptions},
     message::{ChatHistory, Message, MessageContent, MessageRole},
     session::{Session, SessionManager, SessionSettings},
-    tool::{ToolExecutor, ToolParameterSchema, ToolRegistry, ToolResult},
+    tool::ToolRegistry,
     types::PermissionMode,
 };
 
@@ -93,7 +94,7 @@ impl App {
         self.input_mode = InputMode::Normal;
 
         // Check if this is a command
-        if let Some((cmd_name, cmd_args)) = parse_command(&query) {
+        if let Some((cmd_name, _cmd_args)) = parse_command(&query) {
             self.status = format!("Executing command /{}...", cmd_name);
 
             let mut cmd_ctx = CommandContext::new(
@@ -292,7 +293,7 @@ fn ui(f: &mut Frame, app: &App) {
             ]
             .as_ref(),
         )
-        .split(f.size());
+        .split(f.area());
 
     // Render messages
     let messages: Vec<ListItem> = app
@@ -357,10 +358,10 @@ fn ui(f: &mut Frame, app: &App) {
 
     // Show cursor in input mode
     if app.input_mode == InputMode::Editing {
-        f.set_cursor(
+        f.set_cursor_position(Position::new(
             chunks[1].x + app.input.len() as u16 + 1,
             chunks[1].y + 1,
-        );
+        ));
     }
 }
 
@@ -431,7 +432,7 @@ async fn main() -> Result<()> {
     let tool_registry = Arc::new(tool_registry);
 
     // Create command registry and register commands
-    let mut command_registry = CommandRegistry::new();
+    let command_registry = CommandRegistry::new();
     command_registry.register(Arc::new(commands::HelpCommand)).await;
     command_registry.register(Arc::new(commands::DiffCommand)).await;
     command_registry.register(Arc::new(commands::StatusCommand)).await;
