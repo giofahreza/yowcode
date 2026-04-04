@@ -3,7 +3,6 @@
 //! This module implements the command system similar to Claude Code's slash commands.
 
 use crate::error::{Error, Result};
-use crate::message::{ChatHistory, Message, MessageContent, MessageRole};
 use crate::session::SessionManager;
 use crate::tool::ToolRegistry;
 use async_trait::async_trait;

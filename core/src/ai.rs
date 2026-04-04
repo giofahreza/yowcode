@@ -1,7 +1,6 @@
 use crate::error::{AIError, Error, Result};
-use crate::message::{MessageContent, MessageRole, ToolCall};
+use crate::message::ToolCall;
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

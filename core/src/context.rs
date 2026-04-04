@@ -1,12 +1,8 @@
 use crate::message::{Message, MessageRole, MessageContent};
 use crate::types::FilePath;
-use crate::tool::ToolExecutionContext;
-use crate::error::Result;
 use ignore::WalkBuilder;
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 /// Builder for collecting context from a project
 pub struct ContextBuilder {

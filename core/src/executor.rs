@@ -1,6 +1,6 @@
-use crate::ai::{AIClient, ChatCompletionRequest, APIMessage, APIMessageContent, APIToolDefinition, APIFunctionDefinition, StreamCallback};
+use crate::ai::{AIClient, ChatCompletionRequest, APIMessage, APIMessageContent, APIToolDefinition, APIFunctionDefinition};
 use crate::error::{Error, Result};
-use crate::message::{ChatHistory, Message, MessageContent, MessageRole, ToolCall};
+use crate::message::{ChatHistory, Message, MessageRole, ToolCall};
 use crate::session::SessionEvent;
 use crate::tool::{ToolExecutionContext, ToolPermission, ToolRegistry, ToolResult};
 use crate::types::PermissionMode;
