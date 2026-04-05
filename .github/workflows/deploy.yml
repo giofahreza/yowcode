@@ -55,6 +55,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build CLI artifact
+        shell: bash
         run: |
           set -euo pipefail
           cargo build --release --bin yow
@@ -64,6 +65,7 @@ jobs:
           sha256sum yowcode-${{ github.ref_name }}-linux-amd64.tar.gz > yowcode-${{ github.ref_name }}-linux-amd64.tar.gz.sha256
 
       - name: Build Web artifact
+        shell: bash
         run: |
           set -euo pipefail
           cargo build --release --bin yowcode-web
