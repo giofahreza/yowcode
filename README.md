@@ -40,22 +40,35 @@ yowcode/
 
 ## Installation
 
-### Prerequisites
+### Quick Install (Recommended)
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/giofahreza/yowcode/main/install.sh | bash
+```
+
+Or download and run manually:
+
+```bash
+curl -O https://raw.githubusercontent.com/giofahreza/yowcode/main/install.sh
+chmod +x install.sh
+./install.sh
+```
+
+### Build from Source
+
+**Prerequisites:**
 - Rust 1.82 or later
 - SQLite3
-
-### Build
 
 ```bash
 # Build all components
 cargo build --release
 
 # Build CLI only
-cargo build --release -p yowcode
+cargo build --release --bin yow
 
 # Build web server only
-cargo build --release -p yowcode-web
+cargo build --release --bin yowcode-web
 ```
 
 ## Configuration
@@ -99,10 +112,16 @@ export YOWCODE_DB_PATH="~/.yowcode/yowcode.db"
 
 ```bash
 # Run the CLI
-cargo run --bin yowcode
+yow
 
-# Or use the built binary
-./target/release/yowcode
+# Run with YOLO mode (auto-approve all actions)
+yow --yolo
+
+# Show help
+yow --help
+
+# Verbose output
+yow --verbose
 ```
 
 **CLI Controls:**

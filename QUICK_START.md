@@ -13,22 +13,25 @@ YowCode is a Rust-based AI coding assistant with both CLI and Web UI interfaces,
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Install (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/giofahreza/yowcode/main/install.sh | bash
+```
+
+Or build from source:
 
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
-```
 
-### 2. Build
-
-```bash
+# Build
 cd yowcode
 cargo build --release
 ```
 
-### 3. Configure
+### 2. Configure
 
 Set environment variables:
 
@@ -47,10 +50,14 @@ base_url = "https://api.anthropic.com/v1/messages"
 model = "claude-sonnet-4-20250514"
 ```
 
-### 4. Run CLI
+### 3. Run CLI
 
 ```bash
-./target/release/yowcode
+# Run normally
+yow
+
+# Run in YOLO mode (auto-approve all actions)
+yow --yolo
 ```
 
 **CLI Controls:**

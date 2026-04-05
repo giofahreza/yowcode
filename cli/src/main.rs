@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
@@ -33,6 +34,19 @@ use yowcode_core::{
 };
 
 mod tools;
+
+/// YowCode - AI-powered coding assistant
+#[derive(Parser, Debug)]
+#[command(name = "yow", version, author, about)]
+struct Args {
+    /// Enable YOLO mode - auto-approve all actions (use with caution!)
+    #[arg(long)]
+    yolo: bool,
+
+    /// Verbose output
+    #[arg(short, long)]
+    verbose: bool,
+}
 
 /// Main application state
 struct App {
@@ -367,12 +381,24 @@ fn ui(f: &mut Frame, app: &App) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse command line arguments
+    let args = Args::parse();
+
     // Initialize logging
+    let log_filter = if args.verbose {
+        "yowcode=debug,info"
+    } else {
+        "yowcode=info"
+    };
     tracing_subscriber::fmt()
-        .with_env_filter("yowcode=debug,info")
+        .with_env_filter(log_filter)
         .init();
 
-    info!("Starting YowCode CLI");
+    if args.yolo {
+        println!("🚀 YOLO MODE ENABLED - Auto-approving all actions!");
+    }
+
+    info!("Starting YowCode CLI (YOLO: {})", args.yolo);
 
     // Load configuration
     let config = Config::load(None).await.context("Failed to load configuration")?;
@@ -452,9 +478,15 @@ async fn main() -> Result<()> {
     let executor = Arc::new(ChatExecutor::new(ai_client, tool_registry.clone(), tx));
 
     // Create a new session
+    let permission_mode = if args.yolo {
+        PermissionMode::Auto
+    } else {
+        PermissionMode::Default
+    };
+
     let session = Session::new("CLI Session")
         .with_settings(SessionSettings {
-            permission_mode: PermissionMode::Default,
+            permission_mode,
             max_context_tokens: config.ai.max_tokens,
             theme: Some(config.cli.theme.clone()),
             project_id: None,
