@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04  # Ubuntu 20.04 has GLIBC 2.31, compatible with Ubuntu 22.04+ (GLIBC 2.35)
+    runs-on: ubuntu-latest  # Works on Ubuntu 22.04+ (GLIBC 2.35+)
     env:
       RUST_VERSION: "stable"
     steps:
