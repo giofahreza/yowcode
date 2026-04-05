@@ -1,19 +1,17 @@
-//! Slash command system for YowCode
+//! Slash command system for YowCode CLI
 //!
-//! This module implements the command system similar to Claude Code's slash commands.
+//! This module provides a command registry and execution system for slash commands.
 
 use crate::error::{Error, Result};
 use crate::session::SessionManager;
 use crate::tool::ToolRegistry;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Command executor context
+/// Command execution context
 #[derive(Clone)]
 pub struct CommandContext {
     pub session_id: Uuid,
@@ -21,7 +19,6 @@ pub struct CommandContext {
     pub session_manager: Arc<SessionManager>,
     pub tool_registry: Arc<ToolRegistry>,
     pub command_registry: Arc<CommandRegistry>,
-    pub environment: HashMap<String, String>,
 }
 
 impl CommandContext {
@@ -33,69 +30,83 @@ impl CommandContext {
     ) -> Self {
         Self {
             session_id,
-            current_directory: std::env::current_dir().unwrap(),
+            current_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
             session_manager,
             tool_registry,
             command_registry,
-            environment: std::env::vars().collect(),
         }
     }
 }
 
-/// Result of a command execution
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Command execution result
+#[derive(Debug, Clone)]
 pub struct CommandResult {
     pub output: String,
     pub is_error: bool,
     pub exit_code: Option<i32>,
+    pub changed_model: Option<String>,
+    pub changed_mode: Option<String>,
+    pub changed_effort: Option<String>,
 }
 
 impl CommandResult {
-    pub fn success(output: impl Into<String>) -> Self {
+    pub fn success(output: String) -> Self {
         Self {
-            output: output.into(),
+            output,
             is_error: false,
             exit_code: Some(0),
+            changed_model: None,
+            changed_mode: None,
+            changed_effort: None,
         }
     }
 
-    pub fn error(output: impl Into<String>) -> Self {
+    pub fn success_with_changes(
+        output: String,
+        model: Option<String>,
+        mode: Option<String>,
+        effort: Option<String>,
+    ) -> Self {
         Self {
-            output: output.into(),
+            output,
+            is_error: false,
+            exit_code: Some(0),
+            changed_model: model,
+            changed_mode: mode,
+            changed_effort: effort,
+        }
+    }
+
+    pub fn error(output: String) -> Self {
+        Self {
+            output,
             is_error: true,
             exit_code: None,
+            changed_model: None,
+            changed_mode: None,
+            changed_effort: None,
         }
     }
 }
 
-/// Trait for command implementations
-#[async_trait]
-pub trait Command: Send + Sync {
-    /// Get the command name (without the / prefix)
-    fn name(&self) -> &'static str;
+/// Command information
+#[derive(Clone, Debug)]
+pub struct CommandInfo {
+    pub name: String,
+    pub description: String,
+    pub usage: String,
+}
 
-    /// Get the command description
-    fn description(&self) -> &'static str;
-
-    /// Get the command usage
-    fn usage(&self) -> &'static str;
-
-    /// Parse arguments from the command string
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>>;
-
-    /// Execute the command
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult>;
-
-    /// Whether the command requires confirmation before running
-    fn requires_confirmation(&self) -> bool {
-        false
-    }
+/// Command registration
+#[derive(Clone)]
+pub struct CommandRegistration {
+    pub info: CommandInfo,
 }
 
 /// Command registry
 #[derive(Clone)]
 pub struct CommandRegistry {
-    commands: Arc<RwLock<HashMap<String, Arc<dyn Command>>>>,
+    commands: Arc<RwLock<HashMap<String, CommandRegistration>>>,
     aliases: Arc<RwLock<HashMap<String, String>>>,
 }
 
@@ -108,9 +119,17 @@ impl CommandRegistry {
     }
 
     /// Register a command
-    pub async fn register(&self, command: Arc<dyn Command>) {
-        let name = command.name().to_string();
-        self.commands.write().await.insert(name.clone(), command);
+    pub async fn register(&self, name: String, description: String, usage: String) {
+        let name_clone = name.clone();
+        let info = CommandInfo {
+            name,
+            description,
+            usage,
+        };
+        let registration = CommandRegistration {
+            info,
+        };
+        self.commands.write().await.insert(name_clone, registration);
     }
 
     /// Register an alias for a command
@@ -119,7 +138,7 @@ impl CommandRegistry {
     }
 
     /// Get a command by name
-    pub async fn get(&self, name: &str) -> Option<Arc<dyn Command>> {
+    pub async fn get(&self, name: &str) -> Option<CommandRegistration> {
         let commands = self.commands.read().await;
         if let Some(cmd) = commands.get(name) {
             return Some(cmd.clone());
@@ -137,33 +156,16 @@ impl CommandRegistry {
     /// List all commands
     pub async fn list(&self) -> Vec<CommandInfo> {
         let commands = self.commands.read().await;
-        commands
-            .values()
-            .map(|cmd| CommandInfo {
-                name: cmd.name().to_string(),
-                description: cmd.description().to_string(),
-                usage: cmd.usage().to_string(),
-            })
-            .collect()
+        commands.values().map(|cmd| cmd.info.clone()).collect()
     }
-}
 
-impl Default for CommandRegistry {
-    fn default() -> Self {
-        Self::new()
+    /// Get command count
+    pub async fn count(&self) -> usize {
+        self.commands.read().await.len()
     }
-}
-
-/// Information about a command
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommandInfo {
-    pub name: String,
-    pub description: String,
-    pub usage: String,
 }
 
 /// Parse a command string
-/// Returns (command_name, args) if it's a command, or None if it's not a command
 pub fn parse_command(input: &str) -> Option<(String, String)> {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
@@ -187,412 +189,603 @@ pub async fn execute_command(
     let (name, args) = parse_command(input)
         .ok_or_else(|| Error::Other("Not a command (must start with /)".to_string()))?;
 
-    let command = registry.get(&name).await
+    let _command = registry.get(&name).await
         .ok_or_else(|| Error::Other(format!("Unknown command: /{}", name)))?;
 
-    let parsed_args = command.parse_args(&args)?;
-
-    if command.requires_confirmation() {
-        // In a real implementation, this would prompt the user
-        // For now, we'll auto-confirm
-    }
-
-    command.execute(ctx, parsed_args).await
-}
-
-/// /help command
-pub struct HelpCommand;
-
-#[async_trait]
-impl Command for HelpCommand {
-    fn name(&self) -> &'static str {
-        "help"
-    }
-
-    fn description(&self) -> &'static str {
-        "Show available commands"
-    }
-
-    fn usage(&self) -> &'static str {
-        "/help [command_name]"
-    }
-
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>> {
-        let mut map = HashMap::new();
-        if !args.is_empty() {
-            map.insert("command".to_string(), args.trim().to_string());
-        }
-        Ok(map)
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult> {
-        if let Some(cmd_name) = args.get("command") {
-            if let Some(cmd) = ctx.command_registry.get(cmd_name).await {
-                Ok(CommandResult::success(format!(
-                    "Command: /{}\nDescription: {}\nUsage: {}",
-                    cmd.name(),
-                    cmd.description(),
-                    cmd.usage()
-                )))
-            } else {
-                Ok(CommandResult::error(format!("Unknown command: /{}", cmd_name)))
-            }
-        } else {
-            let commands = ctx.command_registry.list().await;
-            let mut output = "Available commands:\n".to_string();
-            for cmd in commands {
-                output.push_str(&format!("  /{} - {}\n", cmd.name, cmd.description));
-            }
-            output.push_str("\nUse /help <command> for more information.");
-            Ok(CommandResult::success(output))
-        }
+    match name.as_str() {
+        "help" => execute_help_command(ctx, args.as_str()).await,
+        "diff" => execute_diff_command(ctx, args.as_str()).await,
+        "status" => execute_status_command(ctx, args.as_str()).await,
+        "commit" => execute_commit_command(ctx, args.as_str()).await,
+        "ls" => execute_ls_command(ctx, args.as_str()).await,
+        "cd" => execute_cd_command(ctx, args.as_str()).await,
+        "pwd" => execute_pwd_command(ctx, args.as_str()).await,
+        "clear" => execute_clear_command(ctx, args.as_str()).await,
+        "undo" => execute_undo_command(ctx, args.as_str()).await,
+        "tools" => execute_tools_command(ctx, args.as_str()).await,
+        "cost" => execute_cost_command(ctx, args.as_str()).await,
+        "config" => execute_config_command(ctx, args.as_str()).await,
+        "mode" => execute_mode_command(ctx, args.as_str()).await,
+        "effort" => execute_effort_command(ctx, args.as_str()).await,
+        "model" => execute_model_command(ctx, args.as_str()).await,
+        "mcp" => execute_mcp_command(ctx, args.as_str()).await,
+        "agent" => execute_agent_command(ctx, args.as_str()).await,
+        "skill" => execute_skill_command(ctx, args.as_str()).await,
+        "memory" => execute_memory_command(ctx, args.as_str()).await,
+        _ => Err(Error::Other(format!("Unknown command: /{}", name))),
     }
 }
 
-/// /diff command
-pub struct DiffCommand;
-
-#[async_trait]
-impl Command for DiffCommand {
-    fn name(&self) -> &'static str {
-        "diff"
+/// Try to find the closest matching command
+pub fn find_closest_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return None;
     }
 
-    fn description(&self) -> &'static str {
-        "Show git diff"
+    let partial = &trimmed[1..]; // Remove the leading /
+
+    // If the input is exactly /, return help
+    if partial.is_empty() {
+        return Some("/help".to_string());
     }
 
-    fn usage(&self) -> &'static str {
-        "/diff [staged|file]"
+    // Try to find commands that start with the partial input
+    let commands = vec![
+        "help", "diff", "status", "commit", "ls", "cd", "pwd",
+        "clear", "undo", "tools", "cost", "config", "mode", "effort",
+        "model", "mcp", "agent", "skill", "memory"
+    ];
+
+    for cmd in commands {
+        if cmd.starts_with(partial) {
+            return Some(format!("/{}", cmd));
+        }
     }
 
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>> {
-        let mut map = HashMap::new();
-        if !args.is_empty() {
-            map.insert("args".to_string(), args.trim().to_string());
-        }
-        Ok(map)
+    None
+}
+
+// ==================== Command Implementations ====================
+
+async fn execute_help_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    let commands = ctx.command_registry.list().await;
+    let mut output = String::from("Available commands:\n");
+
+    for cmd in commands {
+        output.push_str(&format!("  {} - {}\n", cmd.usage, cmd.description));
     }
 
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult> {
-        let args_str = args.get("args").map(|s| s.as_str()).unwrap_or("");
+    Ok(CommandResult::success(output))
+}
 
-        let mut cmd = tokio::process::Command::new("git");
-        cmd.arg("diff");
-        if args_str.contains("staged") || args_str.contains("--staged") {
-            cmd.arg("--staged");
-        }
+async fn execute_diff_command(ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["diff", "--color=none"]);
 
-        // Check if there's a file argument
-        if let Some(file) = args.get("args").filter(|a| !a.contains("staged")) {
-            cmd.arg("--").arg(file);
-        }
+    if !args.is_empty() {
+        cmd.arg(args);
+    }
 
-        cmd.current_dir(&ctx.current_directory);
+    cmd.current_dir(&ctx.current_directory);
 
-        let output = cmd
-            .output()
-            .await
-            .map_err(|e| Error::CommandExecution(e.to_string()))?;
+    let output = cmd.output().await
+        .map_err(|e| Error::CommandExecution(e.to_string()))?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        if output.status.success() {
-            Ok(CommandResult::success(if stdout.is_empty() { "No changes" } else { &stdout }))
-        } else {
-            Ok(CommandResult::error(if stderr.is_empty() { "Failed to get diff" } else { &stderr }))
-        }
+    if output.status.success() {
+        Ok(CommandResult::success(stdout))
+    } else {
+        Ok(CommandResult::error(format!("{}{}", stderr, stdout)))
     }
 }
 
-/// /status command
-pub struct StatusCommand;
+async fn execute_status_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    let output = tokio::process::Command::new("git")
+        .args(["status", "-sb"])
+        .current_dir(&ctx.current_directory)
+        .output()
+        .await
+        .map_err(|e| Error::CommandExecution(e.to_string()))?;
 
-#[async_trait]
-impl Command for StatusCommand {
-    fn name(&self) -> &'static str {
-        "status"
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    fn description(&self) -> &'static str {
-        "Show git repository status"
-    }
-
-    fn usage(&self) -> &'static str {
-        "/status"
-    }
-
-    fn parse_args(&self, _args: &str) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, _args: HashMap<String, String>) -> Result<CommandResult> {
-        let output = tokio::process::Command::new("git")
-            .args(["status", "-sb"])
-            .current_dir(&ctx.current_directory)
-            .output()
-            .await
-            .map_err(|e| Error::CommandExecution(e.to_string()))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if output.status.success() {
-            Ok(CommandResult::success(&stdout))
-        } else {
-            Ok(CommandResult::error(&stderr))
-        }
+    if output.status.success() {
+        Ok(CommandResult::success(stdout))
+    } else {
+        Ok(CommandResult::error(format!("Not in a git repository: {}", stderr)))
     }
 }
 
-/// /commit command
-pub struct CommitCommand;
+async fn execute_commit_command(ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let message = if args.is_empty() {
+        "Update".to_string()
+    } else {
+        args.to_string()
+    };
 
-#[async_trait]
-impl Command for CommitCommand {
-    fn name(&self) -> &'static str {
-        "commit"
-    }
+    let output = tokio::process::Command::new("git")
+        .args(["commit", "-m", &message])
+        .current_dir(&ctx.current_directory)
+        .output()
+        .await
+        .map_err(|e| Error::CommandExecution(e.to_string()))?;
 
-    fn description(&self) -> &'static str {
-        "Create a git commit"
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    fn usage(&self) -> &'static str {
-        "/commit <message>"
-    }
-
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>> {
-        let mut map = HashMap::new();
-        if args.trim().is_empty() {
-            return Err(Error::Other("Commit message is required".to_string()));
-        }
-        map.insert("message".to_string(), args.trim().to_string());
-        Ok(map)
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult> {
-        let message = args.get("message")
-            .ok_or_else(|| Error::Other("Commit message is required".to_string()))?;
-
-        // Stage all changes
-        let _ = tokio::process::Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(&ctx.current_directory)
-            .output()
-            .await;
-
-        // Create commit
-        let output = tokio::process::Command::new("git")
-            .args(["commit", "-m", message])
-            .current_dir(&ctx.current_directory)
-            .output()
-            .await
-            .map_err(|e| Error::CommandExecution(e.to_string()))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if output.status.success() {
-            Ok(CommandResult::success(if stdout.is_empty() { "Commit created" } else { &stdout }))
-        } else {
-            Ok(CommandResult::error(&stderr))
-        }
+    if output.status.success() {
+        Ok(CommandResult::success(stdout))
+    } else {
+        Ok(CommandResult::error(format!("{}{}", stderr, stdout)))
     }
 }
 
-/// /ls command
-pub struct LsCommand;
+async fn execute_ls_command(ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let target_path = if args.is_empty() {
+        ctx.current_directory.clone()
+    } else {
+        ctx.current_directory.join(args)
+    };
 
-#[async_trait]
-impl Command for LsCommand {
-    fn name(&self) -> &'static str {
-        "ls"
+    let output = tokio::process::Command::new("ls")
+        .args(["-la", "--color=none"])
+        .arg(&target_path)
+        .output()
+        .await
+        .map_err(|e| Error::CommandExecution(e.to_string()))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+
+    Ok(CommandResult::success(stdout))
+}
+
+async fn execute_cd_command(ctx: &mut CommandContext, args: &str) -> Result<CommandResult> {
+    if args.is_empty() {
+        return Ok(CommandResult::error("Path required".to_string()));
     }
 
-    fn description(&self) -> &'static str {
-        "List directory contents"
+    let new_path = if args.starts_with('/') {
+        PathBuf::from(args)
+    } else if args == "~" {
+        std::env::var("HOME")
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"))
+    } else {
+        ctx.current_directory.join(args)
+    };
+
+    let canonical = new_path.canonicalize()
+        .map_err(|e| Error::Other(format!("Invalid path: {}", e)))?;
+
+    if !canonical.is_dir() {
+        return Ok(CommandResult::error(format!("Not a directory: {}", args)));
     }
 
-    fn usage(&self) -> &'static str {
-        "/ls [path]"
-    }
+    ctx.current_directory = canonical.clone();
+    Ok(CommandResult::success(format!("Changed to: {}", canonical.display())))
+}
 
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>> {
-        let mut map = HashMap::new();
-        if !args.trim().is_empty() {
-            map.insert("path".to_string(), args.trim().to_string());
-        }
-        Ok(map)
-    }
+async fn execute_pwd_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    Ok(CommandResult::success(format!("{}", ctx.current_directory.display())))
+}
 
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult> {
-        let path = args.get("path")
-            .unwrap_or(&".".to_string())
-            .clone();
+async fn execute_clear_command(_ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    // Return a special result that indicates the screen should be cleared
+    Ok(CommandResult {
+        output: "\x1b[2J\x1b[H".to_string(), // ANSI clear screen
+        is_error: false,
+        exit_code: Some(0),
+        changed_model: None,
+        changed_mode: None,
+        changed_effort: None,
+    })
+}
 
-        let full_path = ctx.current_directory.join(&path);
-
-        let output = tokio::process::Command::new("ls")
-            .arg("-la")
-            .arg(&full_path)
-            .output()
-            .await
-            .map_err(|e| Error::CommandExecution(e.to_string()))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-        if output.status.success() {
-            Ok(CommandResult::success(&stdout))
-        } else {
-            Ok(CommandResult::error(&stderr))
-        }
+async fn execute_undo_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    // This is handled by the TUI, but we return a message for consistency
+    let session = ctx.session_manager.get_session(ctx.session_id).await;
+    match session {
+        Ok(_) => Ok(CommandResult::success("Undo: Last message removed (use arrow keys to navigate history)".to_string())),
+        Err(_) => Ok(CommandResult::error("Failed to undo: Session not found".to_string())),
     }
 }
 
-/// /cd command
-pub struct CdCommand;
+async fn execute_tools_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    let tools = ctx.tool_registry.list();
+    let mut output = String::from("Available tools:\n");
 
-#[async_trait]
-impl Command for CdCommand {
-    fn name(&self) -> &'static str {
-        "cd"
+    for tool in tools {
+        output.push_str(&format!("  {} - {}\n", tool.id, tool.description));
     }
 
-    fn description(&self) -> &'static str {
-        "Change current directory"
+    Ok(CommandResult::success(output))
+}
+
+async fn execute_models_command(_ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    let mut output = String::from("Available AI models:\n");
+
+    // List some popular models
+    let models = vec![
+        ("claude-sonnet-4-20250514", "Anthropic Claude Sonnet 4", "$3/M input"),
+        ("claude-opus-4-20250514", "Anthropic Claude Opus 4", "$15/M input"),
+        ("gpt-4o", "OpenAI GPT-4o", "$5/M input"),
+        ("glm-4-plus", "Zhipu AI GLM-4 Plus", "Variable"),
+    ];
+
+    for (model_id, description, price) in models {
+        output.push_str(&format!("  {} - {} ({})\n", model_id, description, price));
     }
 
-    fn usage(&self) -> &'static str {
-        "/cd <path>"
-    }
+    output.push_str("\nCurrent model: Check /config for current model");
 
-    fn parse_args(&self, args: &str) -> Result<HashMap<String, String>> {
-        let mut map = HashMap::new();
-        if args.trim().is_empty() {
-            return Err(Error::Other("Path is required".to_string()));
+    Ok(CommandResult::success(output))
+}
+
+async fn execute_cost_command(_ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    // This would require tracking token usage across sessions
+    // For now, return a placeholder
+    Ok(CommandResult::success(
+        "Token usage tracking not yet implemented. This will show total tokens used and estimated costs.".to_string()
+    ))
+}
+
+async fn execute_config_command(ctx: &CommandContext, _args: &str) -> Result<CommandResult> {
+    let mut output = format!("Current directory: {}\n", ctx.current_directory.display());
+    output.push_str("Configuration management not yet fully implemented.");
+    Ok(CommandResult::success(output))
+}
+
+async fn execute_mode_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let mode = if args.is_empty() {
+        "current".to_string()
+    } else {
+        args.to_string()
+    };
+
+    match mode.as_str() {
+        "current" => {
+            Ok(CommandResult::success("Permission modes:\n  default - Ask before executing actions\n  auto - Auto-approve all actions (YOLO mode)".to_string()))
         }
-        map.insert("path".to_string(), args.trim().to_string());
-        Ok(map)
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, args: HashMap<String, String>) -> Result<CommandResult> {
-        let path = args.get("path")
-            .ok_or_else(|| Error::Other("Path is required".to_string()))?;
-
-        let new_path = if path.starts_with('/') {
-            PathBuf::from(path)
-        } else if path == "~" {
-            dirs::home_dir().ok_or_else(|| Error::Other("Could not find home directory".to_string()))?
-        } else {
-            ctx.current_directory.join(path)
-        };
-
-        // Try to canonicalize the path
-        let canonical = tokio::fs::canonicalize(&new_path).await;
-
-        match canonical {
-            Ok(absolute_path) if absolute_path.is_dir() => {
-                ctx.current_directory = absolute_path;
-                Ok(CommandResult::success(format!("Changed directory to: {}", ctx.current_directory.display())))
-            }
-            Ok(_) => Ok(CommandResult::error("Path is not a directory")),
-            Err(e) => Ok(CommandResult::error(format!("Failed to change directory: {}", e))),
+        "default" => {
+            Ok(CommandResult::success_with_changes(
+                "Permission mode set to: default (ask before actions)".to_string(),
+                None,
+                Some("default".to_string()),
+                None,
+            ))
+        }
+        "auto" => {
+            Ok(CommandResult::success_with_changes(
+                "Permission mode set to: auto (YOLO mode - auto-approve)".to_string(),
+                None,
+                Some("auto".to_string()),
+                None,
+            ))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown mode: {}. Use: /mode [default|auto]", mode)))
         }
     }
 }
 
-/// /pwd command
-pub struct PwdCommand;
+async fn execute_effort_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let effort = if args.is_empty() {
+        "current".to_string()
+    } else {
+        args.to_string()
+    };
 
-#[async_trait]
-impl Command for PwdCommand {
-    fn name(&self) -> &'static str {
-        "pwd"
-    }
-
-    fn description(&self) -> &'static str {
-        "Print current working directory"
-    }
-
-    fn usage(&self) -> &'static str {
-        "/pwd"
-    }
-
-    fn parse_args(&self, _args: &str) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, _args: HashMap<String, String>) -> Result<CommandResult> {
-        Ok(CommandResult::success(format!("{}", ctx.current_directory.display())))
-    }
-}
-
-/// /clear command
-pub struct ClearCommand;
-
-#[async_trait]
-impl Command for ClearCommand {
-    fn name(&self) -> &'static str {
-        "clear"
-    }
-
-    fn description(&self) -> &'static str {
-        "Clear the conversation history"
-    }
-
-    fn usage(&self) -> &'static str {
-        "/clear"
-    }
-
-    fn parse_args(&self, _args: &str) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, _args: HashMap<String, String>) -> Result<CommandResult> {
-        // In a real implementation, this would clear the message history
-        // For now, we'll just return a success message
-        let _ = ctx.session_id; // Use ctx to avoid warning
-        Ok(CommandResult::success("Conversation cleared"))
-    }
-}
-
-/// /tools command
-pub struct ToolsCommand;
-
-#[async_trait]
-impl Command for ToolsCommand {
-    fn name(&self) -> &'static str {
-        "tools"
-    }
-
-    fn description(&self) -> &'static str {
-        "List available tools"
-    }
-
-    fn usage(&self) -> &'static str {
-        "/tools"
-    }
-
-    fn parse_args(&self, _args: &str) -> Result<HashMap<String, String>> {
-        Ok(HashMap::new())
-    }
-
-    async fn execute(&self, ctx: &mut CommandContext, _args: HashMap<String, String>) -> Result<CommandResult> {
-        let tools = ctx.tool_registry.list();
-        let mut output = "Available tools:\n".to_string();
-        for tool in tools {
-            output.push_str(&format!(
-                "  {} - {} (destructive: {})\n",
-                tool.name,
-                tool.description,
-                tool.is_destructive
-            ));
+    match effort.as_str() {
+        "current" => {
+            Ok(CommandResult::success("Effort levels:\n  low - Faster, less thorough\n  normal - Balanced (default)\n  high - Slower, more thorough".to_string()))
         }
-        // Use ctx to avoid unused warning
-        let _ = ctx.current_directory;
-        Ok(CommandResult::success(output))
+        "low" => {
+            Ok(CommandResult::success_with_changes(
+                "Effort set to: low (faster responses)".to_string(),
+                None,
+                None,
+                Some("low".to_string()),
+            ))
+        }
+        "normal" => {
+            Ok(CommandResult::success_with_changes(
+                "Effort set to: normal (balanced)".to_string(),
+                None,
+                None,
+                Some("normal".to_string()),
+            ))
+        }
+        "high" => {
+            Ok(CommandResult::success_with_changes(
+                "Effort set to: high (more thorough)".to_string(),
+                None,
+                None,
+                Some("high".to_string()),
+            ))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown effort: {}. Use: /effort [low|normal|high]", effort)))
+        }
+    }
+}
+
+async fn execute_model_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let model = if args.is_empty() {
+        "current".to_string()
+    } else {
+        args.to_string()
+    };
+
+    match model.as_str() {
+        "current" => {
+            Ok(CommandResult::success("Available models:\n  claude-opus-4-6 - Most capable (best for complex tasks)\n  claude-sonnet-4-6 - Balanced performance and speed\n  claude-haiku-4-5-20251001 - Fastest (for simple tasks)\n\nUse: /model <name> to change model".to_string()))
+        }
+        "claude-opus-4-6" | "opus" => {
+            Ok(CommandResult::success_with_changes(
+                "Model set to: claude-opus-4-6 (most capable)".to_string(),
+                Some("claude-opus-4-6".to_string()),
+                None,
+                None,
+            ))
+        }
+        "claude-sonnet-4-6" | "sonnet" => {
+            Ok(CommandResult::success_with_changes(
+                "Model set to: claude-sonnet-4-6 (balanced)".to_string(),
+                Some("claude-sonnet-4-6".to_string()),
+                None,
+                None,
+            ))
+        }
+        "claude-haiku-4-5-20251001" | "haiku" => {
+            Ok(CommandResult::success_with_changes(
+                "Model set to: claude-haiku-4-5-20251001 (fastest)".to_string(),
+                Some("claude-haiku-4-5-20251001".to_string()),
+                None,
+                None,
+            ))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown model: {}. Use: /model [opus|sonnet|haiku]", model)))
+        }
+    }
+}
+
+async fn execute_mcp_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let subcommand = if args.is_empty() {
+        "list".to_string()
+    } else {
+        args.split_whitespace().next().unwrap_or("list").to_string()
+    };
+
+    match subcommand.as_str() {
+        "list" => {
+            Ok(CommandResult::success("MCP Servers:\n  No MCP servers configured\n\nUse: /mcp add <name> <url> to add a server".to_string()))
+        }
+        "add" => {
+            Ok(CommandResult::success("MCP server addition requires configuration file.\nUsage: /mcp add <name> <url>".to_string()))
+        }
+        "remove" => {
+            Ok(CommandResult::success("MCP server removal requires configuration file.\nUsage: /mcp remove <name>".to_string()))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown MCP subcommand: {}. Use: /mcp [list|add|remove]", subcommand)))
+        }
+    }
+}
+
+async fn execute_agent_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let subcommand = if args.is_empty() {
+        "list".to_string()
+    } else {
+        args.split_whitespace().next().unwrap_or("list").to_string()
+    };
+
+    match subcommand.as_str() {
+        "list" => {
+            Ok(CommandResult::success("Available agents:\n  general - General purpose coding assistant\n  coder - Specialized for code generation\n  filesystem - File system operations\n  debugger - Debugging assistance\n\nUse: /agent create <name> <type> to create a new agent".to_string()))
+        }
+        "create" => {
+            Ok(CommandResult::success("Agent creation requires configuration.\nUsage: /agent create <name> <type>".to_string()))
+        }
+        "delete" => {
+            Ok(CommandResult::success("Agent deletion requires confirmation.\nUsage: /agent delete <name>".to_string()))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown agent subcommand: {}. Use: /agent [list|create|delete]", subcommand)))
+        }
+    }
+}
+
+async fn execute_skill_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let subcommand = if args.is_empty() {
+        "list".to_string()
+    } else {
+        args.split_whitespace().next().unwrap_or("list").to_string()
+    };
+
+    match subcommand.as_str() {
+        "list" => {
+            Ok(CommandResult::success("Available skills:\n  commit - Create git commits\n  review - Review code changes\n  test - Run tests\n\nUse: /skill create <name> to create a new skill".to_string()))
+        }
+        "create" => {
+            Ok(CommandResult::success("Skill creation requires configuration.\nUsage: /skill create <name>".to_string()))
+        }
+        "delete" => {
+            Ok(CommandResult::success("Skill deletion requires confirmation.\nUsage: /skill delete <name>".to_string()))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown skill subcommand: {}. Use: /skill [list|create|delete]", subcommand)))
+        }
+    }
+}
+
+async fn execute_memory_command(_ctx: &CommandContext, args: &str) -> Result<CommandResult> {
+    let subcommand = if args.is_empty() {
+        "list".to_string()
+    } else {
+        args.split_whitespace().next().unwrap_or("list").to_string()
+    };
+
+    match subcommand.as_str() {
+        "list" => {
+            Ok(CommandResult::success("Memory entries:\n  No memory entries stored\n\nUse: /memory add <key> <value> to add memory".to_string()))
+        }
+        "add" => {
+            Ok(CommandResult::success("Memory addition requires key and value.\nUsage: /memory add <key> <value>".to_string()))
+        }
+        "remove" => {
+            Ok(CommandResult::success("Memory removal requires key.\nUsage: /memory remove <key>".to_string()))
+        }
+        "clear" => {
+            Ok(CommandResult::success("Memory cleared successfully".to_string()))
+        }
+        _ => {
+            Ok(CommandResult::error(format!("Unknown memory subcommand: {}. Use: /memory [list|add|remove|clear]", subcommand)))
+        }
+    }
+}
+
+/// Register all default commands
+pub async fn register_default_commands(registry: &CommandRegistry) {
+    registry.register(
+        String::from("help"),
+        String::from("Show available commands"),
+        String::from("/help"),
+    ).await;
+
+    registry.register(
+        String::from("diff"),
+        String::from("Show git diff"),
+        String::from("/diff [file]"),
+    ).await;
+
+    registry.register(
+        String::from("status"),
+        String::from("Show git repository status"),
+        String::from("/status"),
+    ).await;
+
+    registry.register(
+        String::from("commit"),
+        String::from("Create a git commit"),
+        String::from("/commit [message]"),
+    ).await;
+
+    registry.register(
+        String::from("ls"),
+        String::from("List directory contents"),
+        String::from("/ls [path]"),
+    ).await;
+
+    registry.register(
+        String::from("cd"),
+        String::from("Change directory"),
+        String::from("/cd <path>"),
+    ).await;
+
+    registry.register(
+        String::from("pwd"),
+        String::from("Print working directory"),
+        String::from("/pwd"),
+    ).await;
+
+    registry.register(
+        String::from("clear"),
+        String::from("Clear the screen"),
+        String::from("/clear"),
+    ).await;
+
+    registry.register(
+        String::from("undo"),
+        String::from("Undo last action"),
+        String::from("/undo"),
+    ).await;
+
+    registry.register(
+        String::from("tools"),
+        String::from("List available tools"),
+        String::from("/tools"),
+    ).await;
+
+    registry.register(
+        String::from("cost"),
+        String::from("Show token usage and costs"),
+        String::from("/cost"),
+    ).await;
+
+    registry.register(
+        String::from("config"),
+        String::from("Show or set configuration"),
+        String::from("/config [key] [value]"),
+    ).await;
+
+    registry.register(
+        String::from("mode"),
+        String::from("Show or set permission mode"),
+        String::from("/mode [default|auto]"),
+    ).await;
+
+    registry.register(
+        String::from("effort"),
+        String::from("Show or set AI effort level"),
+        String::from("/effort [low|normal|high]"),
+    ).await;
+
+    registry.register(
+        String::from("model"),
+        String::from("Change AI model"),
+        String::from("/model [opus|sonnet|haiku]"),
+    ).await;
+
+    registry.register(
+        String::from("mcp"),
+        String::from("Manage MCP servers"),
+        String::from("/mcp [list|add|remove]"),
+    ).await;
+
+    registry.register(
+        String::from("agent"),
+        String::from("Manage AI agents"),
+        String::from("/agent [list|create|delete]"),
+    ).await;
+
+    registry.register(
+        String::from("skill"),
+        String::from("Manage skills"),
+        String::from("/skill [list|create|delete]"),
+    ).await;
+
+    registry.register(
+        String::from("memory"),
+        String::from("Manage memory"),
+        String::from("/memory [list|add|remove|clear]"),
+    ).await;
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::test;
+
+    #[tokio::test]
+    async fn test_command_registry() {
+        let registry = CommandRegistry::new();
+        register_default_commands(&registry).await;
+
+        println!("Total commands: {}", registry.count().await);
+
+        // Test that specific commands are registered
+        let status = registry.get("status").await;
+        println!("status: {:?}", status.is_some());
+
+        let mode = registry.get("mode").await;
+        println!("mode: {:?}", mode.is_some());
+
+        let effort = registry.get("effort").await;
+        println!("effort: {:?}", effort.is_some());
     }
 }

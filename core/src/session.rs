@@ -131,6 +131,11 @@ impl SessionManager {
         self.tx.subscribe()
     }
 
+    /// Get the database pool
+    pub fn get_db(&self) -> &Pool<Sqlite> {
+        &self.db
+    }
+
     /// Create a new session
     pub async fn create_session(&self, session: Session) -> Result<Uuid> {
         let id = session.id;

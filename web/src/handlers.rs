@@ -4,12 +4,12 @@ use axum::{
     response::{IntoResponse, Json},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use uuid::Uuid;
 use yowcode_core::{
     message::Message,
     runs::RunConfig,
     session::{Session, SessionSettings},
-    types::Project,
 };
 
 use super::AppState;
@@ -48,7 +48,7 @@ pub async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
         Ok(sessions) => Json(sessions).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -79,7 +79,7 @@ pub async fn create_session(
         Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -94,7 +94,7 @@ pub async fn get_session(
         Ok(session) => Json(session).into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -109,7 +109,7 @@ pub async fn delete_session(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -127,7 +127,7 @@ pub async fn get_messages(
         }
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -150,7 +150,7 @@ pub async fn send_message(
         Ok(()) => StatusCode::ACCEPTED.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -166,7 +166,7 @@ pub async fn update_settings(
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -195,11 +195,56 @@ pub async fn list_tools(State(state): State<AppState>) -> impl IntoResponse {
 
 /// List all projects
 pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
-    match state.session_manager.list_projects().await {
-        Ok(projects) => Json(projects).into_response(),
+    match sqlx::query(
+        "SELECT id, name, path, type, mode, description, backend_test, lint_cmd, frontend_test,
+                auto_promote, is_active, status, created_at
+        FROM projects
+        ORDER BY created_at DESC"
+    )
+    .fetch_all(state.session_manager.get_db())
+    .await
+    {
+        Ok(rows) => {
+            let projects_list: Vec<ProjectResponse> = rows
+                .into_iter()
+                .map(|row| {
+                    let id: Uuid = row.get("id");
+                    let name: String = row.get("name");
+                    let path: String = row.get("path");
+                    let r#type: String = row.get("type");
+                    let mode: String = row.get("mode");
+                    let description: String = row.get("description");
+                    let backend_test: Option<String> = row.get("backend_test");
+                    let lint_cmd: Option<String> = row.get("lint_cmd");
+                    let frontend_test: Option<String> = row.get("frontend_test");
+                    let auto_promote: bool = row.get("auto_promote");
+                    let is_active: bool = row.get("is_active");
+                    let status: String = row.get("status");
+                    let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+
+                    ProjectResponse {
+                        id,
+                        name,
+                        path,
+                        r#type,
+                        mode,
+                        description,
+                        backend_test,
+                        lint_cmd,
+                        frontend_test,
+                        auto_promote,
+                        is_active,
+                        status,
+                        created_at,
+                        run_count: 0,
+                    }
+                })
+                .collect();
+            Json(projects_list).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -210,8 +255,22 @@ pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
 pub struct CreateProjectRequest {
     pub name: String,
     pub path: String,
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
-    pub metadata: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub backend_test: Option<String>,
+    #[serde(default)]
+    pub lint_cmd: Option<String>,
+    #[serde(default)]
+    pub frontend_test: Option<String>,
+    #[serde(default)]
+    pub auto_promote: Option<bool>,
+    #[serde(default)]
+    pub settings: Option<String>,
 }
 
 /// Create a new project
@@ -219,19 +278,60 @@ pub async fn create_project(
     State(state): State<AppState>,
     Json(req): Json<CreateProjectRequest>,
 ) -> impl IntoResponse {
-    let mut project = Project::new(&req.path, &req.name);
-    if let Some(desc) = req.description {
-        project = project.with_description(desc);
-    }
-    if let Some(metadata) = req.metadata {
-        project.env_vars = metadata;
-    }
+    let id = Uuid::new_v4();
+    let now = chrono::Utc::now();
 
-    match state.session_manager.create_project(project).await {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+    let r#type = req.r#type.unwrap_or_else(|| "directory".to_string());
+    let mode = req.mode.unwrap_or_else(|| "host".to_string());
+    let description = req.description.unwrap_or_default();
+    let auto_promote = req.auto_promote.unwrap_or(false);
+
+    match sqlx::query(
+        r#"
+        INSERT INTO projects (id, name, path, type, mode, description, backend_test, lint_cmd,
+                             frontend_test, auto_promote, is_active, status, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        "#
+    )
+    .bind(id)
+    .bind(&req.name)
+    .bind(&req.path)
+    .bind(&r#type)
+    .bind(&mode)
+    .bind(&description)
+    .bind(&req.backend_test)
+    .bind(&req.lint_cmd)
+    .bind(&req.frontend_test)
+    .bind(auto_promote)
+    .bind(true)
+    .bind("ready")
+    .bind(now)
+    .bind(now)
+    .execute(state.session_manager.get_db())
+    .await
+    {
+        Ok(_) => {
+            let project = ProjectResponse {
+                id,
+                name: req.name,
+                path: req.path,
+                r#type,
+                mode,
+                description,
+                backend_test: req.backend_test,
+                lint_cmd: req.lint_cmd,
+                frontend_test: req.frontend_test,
+                auto_promote,
+                is_active: true,
+                status: "ready".to_string(),
+                created_at: now,
+                run_count: 0,
+            };
+            (StatusCode::CREATED, Json(project)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -242,11 +342,306 @@ pub async fn get_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match state.session_manager.get_project(id).await {
-        Ok(project) => Json(project).into_response(),
-        Err(e) => (
+    let db = state.session_manager.get_db();
+
+    // Get project
+    let project = match sqlx::query(
+        "SELECT id, name, path, type, mode, description, backend_test, lint_cmd, frontend_test,
+                auto_promote, is_active, status, created_at
+         FROM projects WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(Some(row)) => {
+            let id: Uuid = row.get("id");
+            let name: String = row.get("name");
+            let path: String = row.get("path");
+            let r#type: String = row.get("type");
+            let mode: String = row.get("mode");
+            let description: String = row.get("description");
+            let backend_test: Option<String> = row.get("backend_test");
+            let lint_cmd: Option<String> = row.get("lint_cmd");
+            let frontend_test: Option<String> = row.get("frontend_test");
+            let auto_promote: bool = row.get("auto_promote");
+            let is_active: bool = row.get("is_active");
+            let status: String = row.get("status");
+            let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+
+            ProjectResponse {
+                id,
+                name,
+                path,
+                r#type,
+                mode,
+                description,
+                backend_test,
+                lint_cmd,
+                frontend_test,
+                auto_promote,
+                is_active,
+                status,
+                created_at,
+                run_count: 0,
+            }
+        }
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "Project not found" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("{}", e) })),
+            )
+                .into_response()
+        }
+    };
+
+    // Get run count
+    let run_count = match sqlx::query("SELECT COUNT(*) FROM runs WHERE project_id = ?")
+        .bind(id)
+        .fetch_one(db)
+        .await
+    {
+        Ok(row) => {
+            let count: i64 = row.get(0);
+            count
+        }
+        Err(_) => 0,
+    };
+
+    let response = ProjectDetailResponse {
+        project,
+        run_count,
+    };
+
+    Json(response).into_response()
+}
+
+/// Update project request
+#[derive(Debug, Deserialize)]
+pub struct UpdateProjectRequest {
+    pub name: Option<String>,
+    pub path: Option<String>,
+    pub r#type: Option<String>,
+    pub mode: Option<String>,
+    pub description: Option<String>,
+    pub backend_test: Option<String>,
+    pub lint_cmd: Option<String>,
+    pub frontend_test: Option<String>,
+    pub auto_promote: Option<bool>,
+    pub is_active: Option<bool>,
+    pub status: Option<String>,
+}
+
+/// Update a project
+pub async fn update_project(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UpdateProjectRequest>,
+) -> impl IntoResponse {
+    let db = state.session_manager.get_db();
+
+    // Update each field individually
+    let mut updated = false;
+
+    if let Some(ref name) = req.name {
+        if sqlx::query("UPDATE projects SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref path) = req.path {
+        if sqlx::query("UPDATE projects SET path = ? WHERE id = ?")
+            .bind(path)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref r#type) = req.r#type {
+        if sqlx::query("UPDATE projects SET type = ? WHERE id = ?")
+            .bind(r#type)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref mode) = req.mode {
+        if sqlx::query("UPDATE projects SET mode = ? WHERE id = ?")
+            .bind(mode)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref description) = req.description {
+        if sqlx::query("UPDATE projects SET description = ? WHERE id = ?")
+            .bind(description)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref backend_test) = req.backend_test {
+        if sqlx::query("UPDATE projects SET backend_test = ? WHERE id = ?")
+            .bind(backend_test)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref lint_cmd) = req.lint_cmd {
+        if sqlx::query("UPDATE projects SET lint_cmd = ? WHERE id = ?")
+            .bind(lint_cmd)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref frontend_test) = req.frontend_test {
+        if sqlx::query("UPDATE projects SET frontend_test = ? WHERE id = ?")
+            .bind(frontend_test)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(auto_promote) = req.auto_promote {
+        if sqlx::query("UPDATE projects SET auto_promote = ? WHERE id = ?")
+            .bind(auto_promote)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(is_active) = req.is_active {
+        if sqlx::query("UPDATE projects SET is_active = ? WHERE id = ?")
+            .bind(is_active)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if let Some(ref status) = req.status {
+        if sqlx::query("UPDATE projects SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(db)
+            .await
+            .is_ok()
+        {
+            updated = true;
+        }
+    }
+
+    if !updated {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "No fields to update" })),
+        )
+            .into_response();
+    }
+
+    // Fetch and return updated project
+    match sqlx::query(
+        "SELECT id, name, path, type, mode, description, backend_test, lint_cmd, frontend_test,
+                auto_promote, is_active, status, created_at
+         FROM projects WHERE id = ?"
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
+    {
+        Ok(Some(row)) => {
+            let id: Uuid = row.get("id");
+            let name: String = row.get("name");
+            let path: String = row.get("path");
+            let r#type: String = row.get("type");
+            let mode: String = row.get("mode");
+            let description: String = row.get("description");
+            let backend_test: Option<String> = row.get("backend_test");
+            let lint_cmd: Option<String> = row.get("lint_cmd");
+            let frontend_test: Option<String> = row.get("frontend_test");
+            let auto_promote: bool = row.get("auto_promote");
+            let is_active: bool = row.get("is_active");
+            let status: String = row.get("status");
+            let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+
+            let project = ProjectResponse {
+                id,
+                name,
+                path,
+                r#type,
+                mode,
+                description,
+                backend_test,
+                lint_cmd,
+                frontend_test,
+                auto_promote,
+                is_active,
+                status,
+                created_at,
+                run_count: 0,
+            };
+
+            (StatusCode::OK, Json(project)).into_response()
+        }
+        Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": "Project not found" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -257,14 +652,54 @@ pub async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match state.session_manager.delete_project(id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+    let db = state.session_manager.get_db();
+
+    // Delete associated runs
+    let _ = sqlx::query("DELETE FROM runs WHERE project_id = ?")
+        .bind(id)
+        .execute(db)
+        .await;
+
+    // Delete the project
+    match sqlx::query("DELETE FROM projects WHERE id = ?")
+        .bind(id)
+        .execute(db)
+        .await
+    {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
+}
+
+// Response types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub path: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub mode: String,
+    pub description: String,
+    pub backend_test: Option<String>,
+    pub lint_cmd: Option<String>,
+    pub frontend_test: Option<String>,
+    pub auto_promote: bool,
+    pub is_active: bool,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub run_count: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectDetailResponse {
+    #[serde(flatten)]
+    pub project: ProjectResponse,
+    pub run_count: i64,
 }
 
 // ==================== Run Handlers ====================
@@ -278,7 +713,7 @@ pub async fn list_runs(
         Ok(runs) => Json(runs).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -315,7 +750,7 @@ pub async fn create_run(
         Ok(run_id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": run_id }))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -330,7 +765,7 @@ pub async fn get_run(
         Ok(run) => Json(run).into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -345,7 +780,7 @@ pub async fn cancel_run(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -360,7 +795,7 @@ pub async fn list_tasks(
         Ok(tasks) => Json(tasks).into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -375,7 +810,7 @@ pub async fn list_artifacts(
         Ok(artifacts) => Json(artifacts).into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -390,7 +825,7 @@ pub async fn list_audit_events(
         Ok(events) => Json(events).into_response(),
         Err(e) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": e.to_string() })),
+            Json(serde_json::json!({ "error": format!("{}", e) })),
         )
             .into_response(),
     }
@@ -599,10 +1034,46 @@ pub async fn index() -> impl IntoResponse {
     axum::response::Html(html).into_response()
 }
 
-/// Serve static files (placeholder)
-pub async fn static_files(Path(_path): Path<String>) -> impl IntoResponse {
-    (
-        StatusCode::NOT_FOUND,
-        "Static files not implemented yet",
-    )
+/// Projects page
+pub async fn projects_page() -> impl IntoResponse {
+    let html = include_str!("../static/projects.html");
+    axum::response::Html(html).into_response()
 }
+
+/// Serve static files
+pub async fn static_files(Path(path): Path<String>) -> impl IntoResponse {
+    let path_str = path.as_str();
+
+    // Security: prevent directory traversal
+    if path_str.contains("..") {
+        return (StatusCode::FORBIDDEN, "Access denied").into_response();
+    }
+
+    // Try to serve from static directory
+    let static_path = format!("../static/{}", path_str.trim_start_matches('/'));
+
+    if let Ok(content) = tokio::fs::read_to_string(&static_path).await {
+        // Simple MIME type detection
+        let mime_type = if static_path.ends_with(".html") {
+            "text/html"
+        } else if static_path.ends_with(".css") {
+            "text/css"
+        } else if static_path.ends_with(".js") {
+            "application/javascript"
+        } else {
+            "text/plain"
+        };
+
+        return match axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", mime_type)
+            .body(content)
+        {
+            Ok(response) => response.into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to build response").into_response(),
+        };
+    }
+
+    (StatusCode::NOT_FOUND, "File not found").into_response()
+}
+

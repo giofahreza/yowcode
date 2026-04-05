@@ -63,26 +63,27 @@ fn create_router(state: AppState) -> Router {
     Router::new()
         // API routes
         .route("/api/sessions", get(list_sessions).post(create_session))
-        .route("/api/sessions/:id", get(get_session).delete(delete_session))
-        .route("/api/sessions/:id/messages", get(get_messages).post(send_message))
-        .route("/api/sessions/:id/settings", put(update_settings))
+        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route("/api/sessions/{id}/messages", get(get_messages).post(send_message))
+        .route("/api/sessions/{id}/settings", put(update_settings))
         .route("/api/tools", get(list_tools))
         .route("/api/health", get(health_check))
         // Project routes
         .route("/api/projects", get(list_projects).post(create_project))
-        .route("/api/projects/:id", get(get_project).delete(delete_project))
-        .route("/api/projects/:id/runs", get(list_runs).post(create_run))
+        .route("/api/projects/{id}", get(get_project).put(update_project).delete(delete_project))
+        .route("/api/projects/{id}/runs", get(list_runs).post(create_run))
         // Run routes
-        .route("/api/runs/:id", get(get_run).delete(cancel_run))
-        .route("/api/runs/:id/tasks", get(list_tasks))
-        .route("/api/runs/:id/artifacts", get(list_artifacts))
-        .route("/api/runs/:id/audit", get(list_audit_events))
+        .route("/api/runs/{id}", get(get_run).delete(cancel_run))
+        .route("/api/runs/{id}/tasks", get(list_tasks))
+        .route("/api/runs/{id}/artifacts", get(list_artifacts))
+        .route("/api/runs/{id}/audit", get(list_audit_events))
         .route("/api/runs/stats", get(get_stats))
         // WebSocket route
         .route("/ws", get(websocket_handler))
         // Static files and index
         .route("/", get(index))
-        .route("/static/*path", get(static_files))
+        .route("/projects", get(projects_page))
+        .route("/static/{path}", get(static_files))
         .with_state(state)
 }
 
@@ -147,6 +148,8 @@ async fn main() -> Result<()> {
     tool_registry.register(Arc::new(GitBranchTool));
     tool_registry.register(Arc::new(ListDirectoryTool));
     tool_registry.register(Arc::new(FileInfoTool));
+    tool_registry.register(Arc::new(WebFetchTool));
+    tool_registry.register(Arc::new(WebSearchTool));
 
     let tool_registry = Arc::new(tool_registry);
 
@@ -154,7 +157,12 @@ async fn main() -> Result<()> {
     let (tx, _rx) = broadcast::channel(1000);
 
     // Create executor
-    let executor = Arc::new(ChatExecutor::new(ai_client, tool_registry.clone(), tx));
+    let executor = Arc::new(ChatExecutor::new(
+        ai_client,
+        tool_registry.clone(),
+        tx,
+        config.ai.model.clone(),
+    ));
 
     // Create app state
     let run_manager = Arc::new(RunManager::new());
@@ -361,6 +369,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 use yowcode_core::tools::{
     CommitTool, DiffTool, AskUserQuestionTool, SleepTool, SyntheticOutputTool,
     GitStatusTool, GitBranchTool, ListDirectoryTool, FileInfoTool,
+    WebFetchTool, WebSearchTool,
 };
 
 // Simple tool implementations for the web server

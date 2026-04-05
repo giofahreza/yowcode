@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use uuid::Uuid;
+
+impl fmt::Display for InterfaceMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InterfaceMode::CLI => write!(f, "CLI"),
+            InterfaceMode::Web => write!(f, "Web"),
+            InterfaceMode::Both => write!(f, "Both"),
+        }
+    }
+}
 
 /// Unique identifier for a tool
 pub type ToolId = String;

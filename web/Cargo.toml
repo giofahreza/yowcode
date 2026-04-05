@@ -20,6 +20,9 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 chrono = { workspace = true, features = ["serde"] }
 
+# Database
+sqlx = { workspace = true, features = ["macros"] }
+
 # Web
 axum = { workspace = true }
 axum-extra = { workspace = true }

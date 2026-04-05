@@ -24,6 +24,8 @@ chrono = { workspace = true }
 clap = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
+unicode-width = "0.2"
+textwrap = "0.16"
 
 # Async
 async-trait = { workspace = true }

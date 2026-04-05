@@ -14,7 +14,61 @@ pub enum AIProvider {
     OpenAI,
     Anthropic,
     OpenRouter,
+    Groq,
+    Together,
+    DeepSeek,
+    OpenAICompatible,
     Custom,
+}
+
+impl AIProvider {
+    /// Get the default base URL for a provider
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            AIProvider::OpenAI => "https://api.openai.com/v1/chat/completions",
+            AIProvider::Anthropic => "https://api.anthropic.com/v1/messages",
+            AIProvider::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
+            AIProvider::Groq => "https://api.groq.com/openai/v1/chat/completions",
+            AIProvider::Together => "https://api.together.xyz/v1/chat/completions",
+            AIProvider::DeepSeek => "https://api.deepseek.com/v1/chat/completions",
+            AIProvider::OpenAICompatible => "https://api.openai.com/v1/chat/completions",
+            AIProvider::Custom => "https://api.openai.com/v1/chat/completions",
+        }
+    }
+
+    /// Get the default model for a provider
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            AIProvider::OpenAI => "gpt-4o-mini",
+            AIProvider::Anthropic => "claude-sonnet-4-20250514",
+            AIProvider::OpenRouter => "anthropic/claude-sonnet-4",
+            AIProvider::Groq => "llama-3.3-70b-versatile",
+            AIProvider::Together => "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            AIProvider::DeepSeek => "deepseek-chat",
+            AIProvider::OpenAICompatible => "gpt-4o-mini",
+            AIProvider::Custom => "gpt-4o-mini",
+        }
+    }
+
+    /// Check if provider uses Anthropic-style headers
+    pub fn uses_anthropic_headers(&self) -> bool {
+        matches!(self, AIProvider::Anthropic)
+    }
+
+    /// Parse provider from string
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "openai" => Some(AIProvider::OpenAI),
+            "anthropic" | "claude" => Some(AIProvider::Anthropic),
+            "openrouter" => Some(AIProvider::OpenRouter),
+            "groq" => Some(AIProvider::Groq),
+            "together" => Some(AIProvider::Together),
+            "deepseek" => Some(AIProvider::DeepSeek),
+            "openai-compatible" => Some(AIProvider::OpenAICompatible),
+            "custom" => Some(AIProvider::Custom),
+            _ => None,
+        }
+    }
 }
 
 /// Message format for API calls
@@ -311,5 +365,156 @@ impl AIClient for OpenAICompatClient {
             }],
             usage: None,
         })
+    }
+}
+
+/// Model information and capabilities
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub provider: AIProvider,
+    pub context_length: usize,
+    pub supports_tools: bool,
+    pub supports_vision: bool,
+    pub supports_streaming: bool,
+    pub input_cost_per_1k: f64,
+    pub output_cost_per_1k: f64,
+}
+
+impl ModelInfo {
+    /// Create a new model info
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        provider: AIProvider,
+        context_length: usize,
+    ) -> Self {
+        let id = id.into();
+        Self {
+            id: id.clone(),
+            name: name.into(),
+            provider,
+            context_length,
+            supports_tools: true,
+            supports_vision: false,
+            supports_streaming: true,
+            input_cost_per_1k: 0.0,
+            output_cost_per_1k: 0.0,
+        }
+    }
+
+    /// Set tool support
+    pub fn with_tools(mut self, supports: bool) -> Self {
+        self.supports_tools = supports;
+        self
+    }
+
+    /// Set vision support
+    pub fn with_vision(mut self, supports: bool) -> Self {
+        self.supports_vision = supports;
+        self
+    }
+
+    /// Set streaming support
+    pub fn with_streaming(mut self, supports: bool) -> Self {
+        self.supports_streaming = supports;
+        self
+    }
+
+    /// Set pricing
+    pub fn with_pricing(mut self, input: f64, output: f64) -> Self {
+        self.input_cost_per_1k = input;
+        self.output_cost_per_1k = output;
+        self
+    }
+}
+
+/// Model catalog with known models
+pub struct ModelCatalog;
+
+impl ModelCatalog {
+    /// Get all known models
+    pub fn all_models() -> Vec<ModelInfo> {
+        vec![
+            // OpenAI models
+            ModelInfo::new("gpt-4o", "GPT-4o", AIProvider::OpenAI, 128000)
+                .with_vision(true)
+                .with_pricing(2.5, 10.0),
+            ModelInfo::new("gpt-4o-mini", "GPT-4o Mini", AIProvider::OpenAI, 128000)
+                .with_vision(true)
+                .with_pricing(0.15, 0.6),
+            ModelInfo::new("gpt-4-turbo", "GPT-4 Turbo", AIProvider::OpenAI, 128000)
+                .with_vision(true)
+                .with_pricing(10.0, 30.0),
+            ModelInfo::new("gpt-3.5-turbo", "GPT-3.5 Turbo", AIProvider::OpenAI, 16385)
+                .with_pricing(0.5, 1.5),
+
+            // Anthropic models
+            ModelInfo::new("claude-sonnet-4-20250514", "Claude Sonnet 4", AIProvider::Anthropic, 200000)
+                .with_vision(true)
+                .with_pricing(3.0, 15.0),
+            ModelInfo::new("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", AIProvider::Anthropic, 200000)
+                .with_vision(true)
+                .with_pricing(3.0, 15.0),
+            ModelInfo::new("claude-3-haiku-20240307", "Claude 3 Haiku", AIProvider::Anthropic, 200000)
+                .with_pricing(0.25, 1.25),
+
+            // Groq models
+            ModelInfo::new("llama-3.3-70b-versatile", "Llama 3.3 70B", AIProvider::Groq, 128000)
+                .with_pricing(0.0, 0.0), // Free tier
+            ModelInfo::new("mixtral-8x7b-32768", "Mixtral 8x7b", AIProvider::Groq, 32768)
+                .with_pricing(0.0, 0.0),
+
+            // Together models
+            ModelInfo::new("meta-llama/Llama-3.3-70B-Instruct-Turbo", "Llama 3.3 70B Turbo", AIProvider::Together, 128000)
+                .with_pricing(0.9, 0.9),
+            ModelInfo::new("mistralai/Mixtral-8x7B-Instruct-v0.1", "Mixtral 8x7B", AIProvider::Together, 32768)
+                .with_pricing(0.3, 0.3),
+
+            // DeepSeek models
+            ModelInfo::new("deepseek-chat", "DeepSeek Chat", AIProvider::DeepSeek, 128000)
+                .with_pricing(0.0, 0.0), // Very cheap
+            ModelInfo::new("deepseek-coder", "DeepSeek Coder", AIProvider::DeepSeek, 128000)
+                .with_pricing(0.0, 0.0),
+
+            // GLM models (ZhipuAI)
+            ModelInfo::new("glm-4-plus", "GLM-4 Plus", AIProvider::OpenAICompatible, 128000)
+                .with_pricing(0.5, 0.5),
+            ModelInfo::new("glm-4-flash", "GLM-4 Flash", AIProvider::OpenAICompatible, 128000)
+                .with_pricing(0.1, 0.1),
+        ]
+    }
+
+    /// Get model by ID
+    pub fn get_model(id: &str) -> Option<ModelInfo> {
+        Self::all_models().into_iter().find(|m| m.id == id)
+    }
+
+    /// Get models by provider
+    pub fn get_models_by_provider(provider: AIProvider) -> Vec<ModelInfo> {
+        Self::all_models()
+            .into_iter()
+            .filter(|m| m.provider == provider)
+            .collect()
+    }
+
+    /// Search models by name
+    pub fn search_models(query: &str) -> Vec<ModelInfo> {
+        let query = query.to_lowercase();
+        Self::all_models()
+            .into_iter()
+            .filter(|m| m.id.to_lowercase().contains(&query) || m.name.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    /// Get recommended model for a use case
+    pub fn recommend(for_coding: bool, for_vision: bool) -> ModelInfo {
+        match (for_coding, for_vision) {
+            (true, false) => Self::get_model("gpt-4o-mini").unwrap_or(Self::all_models()[0].clone()),
+            (true, true) => Self::get_model("gpt-4o").unwrap_or(Self::all_models()[0].clone()),
+            (false, false) => Self::get_model("gpt-4o-mini").unwrap_or(Self::all_models()[0].clone()),
+            (false, true) => Self::get_model("gpt-4o").unwrap_or(Self::all_models()[0].clone()),
+        }
     }
 }

@@ -45,6 +45,7 @@ pub struct ChatExecutor {
     tool_registry: Arc<ToolRegistry>,
     _session_tx: tokio::sync::broadcast::Sender<SessionEvent>,
     current_directory: Arc<RwLock<Option<String>>>,
+    model: String,
 }
 
 impl ChatExecutor {
@@ -52,12 +53,14 @@ impl ChatExecutor {
         ai_client: Arc<dyn AIClient>,
         tool_registry: Arc<ToolRegistry>,
         session_tx: tokio::sync::broadcast::Sender<SessionEvent>,
+        model: String,
     ) -> Self {
         Self {
             ai_client,
             tool_registry,
             _session_tx: session_tx,
             current_directory: Arc::new(RwLock::new(None)),
+            model,
         }
     }
 
@@ -94,7 +97,7 @@ impl ChatExecutor {
             let api_messages = self.convert_messages_to_api(&history.messages);
 
             let request = ChatCompletionRequest {
-                model: "claude-sonnet-4-20250514".to_string(),
+                model: self.model.clone(),
                 messages: api_messages,
                 tools: Some(self.build_tool_schema()),
                 max_tokens: Some(8192),
@@ -276,7 +279,7 @@ impl ChatExecutor {
             .map(|tool| APIToolDefinition {
                 tool_type: "function".to_string(),
                 function: APIFunctionDefinition {
-                    name: tool.name.clone(),
+                    name: tool.id.clone(),
                     description: tool.description.clone(),
                     parameters: serde_json::json!({
                         "type": "object",
