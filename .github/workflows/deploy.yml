@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04  # Use Ubuntu 20.04 with GLIBC 2.31 for compatibility
+    container:
+      image: rust:1.82-bullseye  # Debian 11 with GLIBC 2.31
     env:
       RUST_VERSION: "stable"
     steps:
